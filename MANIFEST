@@ -1,0 +1,12 @@
+setup.py
+pydns/__init__.py
+pydns/dbzone.py
+pydns/dn.py
+pydns/dnssec.py
+pydns/filters.py
+pydns/mdns.py
+pydns/proto.py
+pydns/rec.py
+pydns/rescache.py
+pydns/resolver.py
+pydns/server.py

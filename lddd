@@ -1,0 +1,78 @@
+#!/usr/bin/python
+#    ldd - DNS implementation in Python
+#    Copyright (C) 2006 Fredrik Tolf <fredrik@dolda2000.com>
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software
+#    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+
+import os
+import sys
+import getopt
+import socket
+import signal
+import imp
+import logging
+
+from ldd import server
+
+cfname = "/etc/lddd/conf"
+port = 53
+daemonize = True
+opts, args = getopt.getopt(sys.argv[1:], "ndc:p:")
+for o, a in opts:
+    if o == "-d":
+        logging.basicConfig(level = logging.DEBUG)
+        daemonize = False
+    if o == "-c":
+        cfname = a
+    if o == "-n":
+        daemonize = False
+    if o == "-p":
+        port = int(a)
+
+logger = logging.getLogger("ldd.daemon")
+
+def diehandler(signum, frame):
+    global alive
+    alive = False
+
+for sig in [getattr(signal, "SIG" + s) for s in ["INT", "TERM"]]:
+    signal.signal(sig, diehandler)
+
+srv = server.dnsserver()
+
+cf = open(cfname, "r")
+cmod = imp.load_module("servconf", cf, cfname, ("", "r", imp.PY_SOURCE))
+cf.close()
+
+cmod.setup(srv)
+if(len(srv.sockets) < 1):
+    sk = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    sk.bind(("", port))
+    srv.addsock(socket.AF_INET6, sk)
+logger.info("config OK, starting server")
+
+alive = True
+srv.start()
+
+if daemonize:
+    if(os.fork() != 0):
+        sys.exit(0)
+    os.chdir("/")
+
+while alive:
+    signal.pause()
+logger.info("terminating")
+srv.stop()

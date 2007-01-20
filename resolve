@@ -1,0 +1,63 @@
+#!/usr/bin/python
+#    ldd - DNS implementation in Python
+#    Copyright (C) 2006 Fredrik Tolf <fredrik@dolda2000.com>
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software
+#    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+
+import socket
+import sys
+import getopt
+import time
+
+from ldd import resolver
+
+nameserver = (socket.AF_INET, "198.41.0.4", 53)
+rtype = "a"
+lrec = True
+srec = False
+verbose = False
+opts, args = getopt.getopt(sys.argv[1:], "vrRs:t:p:")
+
+for o, a in opts:
+    if o == "-s":
+        nameserver = (socket.AF_INET, a, 53)
+    if o == "-t":
+        if a == "any":
+            rtype = 255
+        else:
+            rtype = a
+    if o == "-p":
+        nameserver = nameserver[0:2] + (int(a),)
+    if o == "-r":
+        lrec = False
+    if o == "-R":
+        srec = True
+    if o == "-v":
+        verbose = True
+
+if len(args) < 1:
+    print "No target given"
+    sys.exit(1)
+
+res = resolver.resolver(nameserver, lrec, srec, verbose = verbose)
+try:
+    rsp = res.squery(args[0], rtype)
+except resolver.error, inst:
+    print "error: " + str(inst)
+except KeyboardInterrupt:
+    sys.exit(1)
+else:
+    print str(rsp)

@@ -1,0 +1,218 @@
+#!/usr/bin/python
+#    ldd - DNS implementation in Python
+#    Copyright (C) 2006 Fredrik Tolf <fredrik@dolda2000.com>
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software
+#    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+
+import sys
+from getopt import getopt
+import socket
+
+from ldd import dbzone, rec, dn
+
+if len(sys.argv) < 3:
+    print "usage: dnsdbtool [-d] DBDIR DBNAME [COMMAND [ARGS...]]"
+    print "       dnsdbtool -c DBDIR DBNAME"
+    sys.exit(1)
+
+debug = False
+currrset = None
+curname = None
+opts, args = getopt(sys.argv[1:], "cd")
+for o, a in opts:
+    if o == "-c":
+        dbzone.dnsdb.create(args[0], args[1])
+        sys.exit(0)
+    if o == "-d":
+        debug = True
+
+db = dbzone.dnsdb(args[0], args[1])
+
+args = args[2:]
+
+class error(Exception):
+    def __init__(self, text):
+        self.text = text
+
+    def __str__(self):
+        return self.text
+
+def rrusage(name, syn):
+    u = ""
+    for e in syn:
+        u += " " + e[1].upper()
+    return "usage: " + name + u
+
+def mkrr(line):
+    rtype = rec.rtypebyname(line[0])
+    if rtype is None:
+        raise error("no such RR type " + line[0])
+    rtype = rec.rtypebyid(rtype)
+    syn = rtype[2]
+    if(len(line) != len(syn) + 1):
+        raise error(rrusage(rtype[1], syn))
+    return rec.rrdata(*line)
+
+def tokenize(line):
+    tokens = []
+    state = 0
+    for c in line + " ":
+        if state == 0:
+            if not c.isspace():
+                ctok = ""
+                state = 1
+        if state == 1:
+            if c.isspace():
+                tokens += [ctok]
+                state = 0
+            elif c == '"':
+                state = 2
+            elif c == "\\":
+                state = 3
+            else:
+                ctok += c
+        elif state == 2:
+            if c == '"':
+                state = 1
+            elif c == "\\":
+                state = 4
+            else:
+                ctok += c
+        elif state == 3:
+            ctok += c
+            state = 1
+        elif state == 4:
+            ctok += c
+            state = 2
+    return tokens
+
+def assertargs(cmd, line, num, usage):
+    if(len(line) < num):
+        raise error("usage: " + cmd + " " + usage)
+
+def runcommand(line):
+    global currrset, curname
+    cmd = line[0]
+    line = line[1:]
+    if cmd == "addnm":
+        assertargs(cmd, line, 3, "[-f FLAG] NAME TTL RR RRPARAM...")
+        opts, line = getopt(line, "f:")
+        opts = dict(opts)
+        head = rec.rrhead(dn.fromstring(line[0]), line[2])
+        ttl = int(line[1])
+        data = mkrr(line[2:])
+        rr = rec.rr(head, ttl, data)
+        if "-f" in opts: rr.setflags(opts["-f"].split(","))
+        db.addrr(head.name, rr)
+    elif cmd == "rmname":
+        assertargs(cmd, line, 1, "NAME")
+        name = dn.fromstring(line[0])
+        db.rmname(name)
+    elif cmd == "rmrt":
+        assertargs(cmd, line, 2, "NAME RRTYPE")
+        name = dn.fromstring(line[0])
+        db.rmrtype(name, line[1])
+    elif cmd == "lsnames":
+        for name in db.listnames():
+            print str(name)
+    elif cmd == "lsrr":
+        assertargs(cmd, line, 1, "NAME")
+        name = dn.fromstring(line[0])
+        rrset = db.lookup(name)
+#        dbzone.rootify(rrset, dn.fromstring("dolda2000.com."))
+        if rrset is None:
+            raise error("no such name in database")
+        for rr in rrset:
+            print str(rr)
+    elif cmd == "load":
+        assertargs(cmd, line, 1, "NAME")
+        name = dn.fromstring(line[0])
+        currrset = db.lookup(name)
+        curname = name
+        if currrset is None:
+            currrset = []
+    elif cmd == "add":
+        assertargs(cmd, line, 2, "[-f FLAG] TTL RR RRPARAM...")
+        opts, line = getopt(line, "f:")
+        opts = dict(opts)
+        head = rec.rrhead(curname, line[1])
+        ttl = int(line[0])
+        data = mkrr(line[1:])
+        rr = rec.rr(head, ttl, data)
+        if "-f" in opts: rr.setflags(opts["-f"].split(","))
+        currrset += [rr]
+    elif cmd == "ls":
+        if currrset is None:
+            raise error("no RRset loaded")
+        for i, rr in enumerate(currrset):
+            print str(i) + ": " + str(rr)
+    elif cmd == "rm":
+        assertargs(cmd, line, 1, "ID")
+        rrid = int(line[0])
+        currrset[rrid:rrid + 1] = []
+    elif cmd == "chttl":
+        assertargs(cmd, line, 2, "ID NEWTTL")
+        rrid = int(line[0])
+        ttl = int(line[1])
+        currrset[rrid].head.ttl = ttl
+    elif cmd == "chdt":
+        assertargs(cmd, line, 3, "ID NAME DATA")
+        rrid = int(line[0])
+        currrset[rrid].data[line[1]] = line[2]
+    elif cmd == "sf":
+        assertargs(cmd, line, 2, "ID FLAGS...")
+        rrid = int(line[0])
+        currrset[rrid].setflags(line[1:])
+    elif cmd == "cf":
+        assertargs(cmd, line, 2, "ID FLAGS...")
+        rrid = int(line[0])
+        currrset[rrid].clrflags(line[1:])
+    elif cmd == "store":
+        if len(line) > 0:
+            name = line[0]
+        else:
+            name = curname
+        db.set(name, currrset)
+    elif cmd == "?" or cmd == "help":
+        print "Available commands:"
+        print "addnm, rmname, rmrt, lsnames, lsrr, load, add, ls, rm,"
+        print "chttl, chdt, sf, cf, store"
+    else:
+        print "no such command: " + cmd
+
+if len(args) == 0:
+    while True:
+        if sys.stdin.isatty():
+            sys.stderr.write("> ")
+        line = sys.stdin.readline()
+        if line == "":
+            if sys.stdin.isatty(): print
+            break
+        try:
+            tokens = tokenize(line)
+            if len(tokens) > 0: runcommand(tokens)
+        except error:
+            sys.stderr.write(str(sys.exc_info()[1]) + "\n")
+else:
+    try:
+        runcommand(args)
+    except SystemExit:
+        raise
+    except:
+        if debug:
+            raise
+        else:
+            sys.stderr.write(str(sys.exc_info()[1]) + "\n")
